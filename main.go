@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"regexp"
@@ -10,68 +11,26 @@ import (
 )
 
 var (
-	numParallel = 4
-	Filters     = map[string]string{
-		"request_id": ".*",
-		"timestamp":  ".*",
-	}
+	// Command-line arguments.
+	filtersArg    = flag.String("filters", "{}", "A JSON string containg key-regex pairs")
+	numGoroutines = flag.Int("numGoroutines", 4, "Number of concurrent goroutines to use for parsing the stream")
 )
 
-func main() {
-	parseQueue := make(chan string)
-	printQueue := make(chan string)
+type stringOnlyJSON map[string]string
 
-	var wgPrinter sync.WaitGroup
-	wgPrinter.Add(1)
-	go printer(printQueue, &wgPrinter)
-
-	var wgParsers sync.WaitGroup
-	for i := 0; i < numParallel; i++ {
-		wgParsers.Add(1)
-		go parser(parseQueue, printQueue, &wgParsers)
-	}
-
-	scanner := bufio.NewScanner(os.Stdin)
-	for scanner.Scan() {
-		parseQueue <- scanner.Text()
-	}
-
-	close(parseQueue)
-	wgParsers.Wait()
-
-	close(printQueue)
-	wgPrinter.Wait()
+type Filterer interface {
+	ToKeep(jsonObj stringOnlyJSON) bool
 }
 
-func printer(lines <-chan string, wg *sync.WaitGroup) {
-	defer wg.Done()
-	for line := range lines {
-		fmt.Println(line)
-	}
+// filter encapsulates filtering rules represented as a map of JSON key to
+// regexp criteria.
+type filter struct {
+	rules map[string]string
 }
 
-func parser(in <-chan string, out chan<- string, wg *sync.WaitGroup) {
-	defer wg.Done()
-	for line := range in {
-		// Parse to JSON.
-		var jsonObj map[string]interface{}
-		json.Unmarshal([]byte(line), &jsonObj)
-
-		// Filter based on Filters.
-		if !toKeep(jsonObj) {
-			continue
-		}
-
-		out <- line
-	}
-}
-
-// toKeep uses the global variable Filter to filter the jsonObj, returning true
-// if for each key-regexp pair in Filter, the jsonObj satisfy the regexp for the
-// corresponding key.
-func toKeep(jsonObj map[string]interface{}) bool {
-	for key, matcher := range Filters {
-		value, ok := jsonObj[key].(string)
+func (f filter) ToKeep(jsonObj stringOnlyJSON) bool {
+	for key, matcher := range f.rules {
+		value, ok := jsonObj[key]
 		if !ok {
 			return false
 		}
@@ -80,4 +39,63 @@ func toKeep(jsonObj map[string]interface{}) bool {
 		}
 	}
 	return true
+}
+
+func main() {
+	flag.Parse()
+
+	// Set up printing queue and goroutine.
+	printQueue := make(chan string)
+	var wgPrinter sync.WaitGroup
+	wgPrinter.Add(1)
+	go printer(printQueue, &wgPrinter)
+
+	// Set up parsing queue and multiple goroutines for parsing.
+	parseQueue := make(chan string)
+	var wgParsers sync.WaitGroup
+	filters := stringToJSON(*filtersArg)
+	for i := 0; i < *numGoroutines; i++ {
+		wgParsers.Add(1)
+		go parser(filter{filters}, parseQueue, printQueue, &wgParsers)
+	}
+
+	// Read from STDIN and parsing and printing
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		parseQueue <- scanner.Text()
+	}
+
+	// Wait for goroutines to finish.
+	close(parseQueue)
+	wgParsers.Wait()
+
+	close(printQueue)
+	wgPrinter.Wait()
+}
+
+func printer(toPrint <-chan string, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for line := range toPrint {
+		fmt.Println(line)
+	}
+}
+
+func parser(f Filterer, toParse <-chan string, parsed chan<- string,
+	wg *sync.WaitGroup) {
+	defer wg.Done()
+	for line := range toParse {
+		if !f.ToKeep(stringToJSON(line)) {
+			continue
+		}
+		parsed <- line
+	}
+}
+
+// Utility Functions
+
+func stringToJSON(s string) (j stringOnlyJSON) {
+	if err := json.Unmarshal([]byte(s), &j); err != nil {
+		panic(err)
+	}
+	return
 }
