@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 	"sync"
 )
 
@@ -14,9 +15,21 @@ var (
 	// Command-line arguments.
 	filtersArg    = flag.String("filters", "{}", "A JSON string containg key-regex pairs")
 	numGoroutines = flag.Int("numGoroutines", 4, "Number of concurrent goroutines to use for parsing the stream")
+	project       = flag.String("project", "", "A comma-separated list of string representing keys to be printed out")
 )
 
 type stringOnlyJSON map[string]string
+
+func (s stringOnlyJSON) String() string {
+	var sb strings.Builder
+	sb.WriteString("{")
+	for k, v := range s {
+		sb.WriteString(fmt.Sprintf("\"%s\": \"%s\"", k, v))
+	}
+	sb.WriteString("}")
+	return sb.String()
+
+}
 
 type Filterer interface {
 	ToKeep(jsonObj stringOnlyJSON) bool
@@ -45,7 +58,7 @@ func main() {
 	flag.Parse()
 
 	// Set up printing queue and goroutine.
-	printQueue := make(chan string)
+	printQueue := make(chan stringOnlyJSON)
 	var wgPrinter sync.WaitGroup
 	wgPrinter.Add(1)
 	go printer(printQueue, &wgPrinter)
@@ -73,21 +86,37 @@ func main() {
 	wgPrinter.Wait()
 }
 
-func printer(toPrint <-chan string, wg *sync.WaitGroup) {
+func printer(toPrint <-chan stringOnlyJSON, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for line := range toPrint {
-		fmt.Println(line)
+		if *project == "" {
+			fmt.Println(line)
+			continue
+		}
+
+		var sb strings.Builder
+		sb.WriteString("{")
+		for idx, key := range strings.Split(*project, ",") {
+			if idx != 0 {
+				sb.WriteString(", ")
+			}
+			trimmedKey := strings.TrimSpace(key)
+			sb.WriteString(fmt.Sprintf("\"%s\": \"%s\"", trimmedKey, line[trimmedKey]))
+		}
+		sb.WriteString("}")
+		fmt.Println(sb.String())
 	}
 }
 
-func parser(f Filterer, toParse <-chan string, parsed chan<- string,
+func parser(f Filterer, toParse <-chan string, parsed chan<- stringOnlyJSON,
 	wg *sync.WaitGroup) {
 	defer wg.Done()
 	for line := range toParse {
-		if !f.ToKeep(stringToJSON(line)) {
+		jsonObj := stringToJSON(line)
+		if !f.ToKeep(jsonObj) {
 			continue
 		}
-		parsed <- line
+		parsed <- jsonObj
 	}
 }
 
