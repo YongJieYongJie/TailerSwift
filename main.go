@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -21,10 +22,26 @@ var (
 type stringOnlyJSON map[string]string
 
 func (s stringOnlyJSON) String() string {
+
+	// Sort the keys on the map to ensure consistent output
+	// TODO: Evaluate performance vs using fmt.Sprint to the string, and process
+	// that instead.
+	keys := make([]string, len(s))
+	i := 0
+	for k := range s {
+		keys[i] = k
+		i++
+	}
+	sort.Strings(keys)
+
+	// Actually builds the output.
 	var sb strings.Builder
 	sb.WriteString("{")
-	for k, v := range s {
-		sb.WriteString(fmt.Sprintf("\"%s\": \"%s\"", k, v))
+	for idx, key := range keys {
+		if idx != 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(fmt.Sprintf("\"%s\": \"%s\"", key, s[key]))
 	}
 	sb.WriteString("}")
 	return sb.String()
