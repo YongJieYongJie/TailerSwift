@@ -105,23 +105,20 @@ func main() {
 
 func printer(toPrint <-chan stringOnlyJSON, wg *sync.WaitGroup) {
 	defer wg.Done()
+
+	jsonOut := json.NewEncoder(os.Stdout)
+
 	for line := range toPrint {
 		if *project == "" {
-			fmt.Println(line)
+			jsonOut.Encode(line)
 			continue
 		}
 
-		var sb strings.Builder
-		sb.WriteString("{")
-		for idx, key := range strings.Split(*project, ",") {
-			if idx != 0 {
-				sb.WriteString(", ")
-			}
-			trimmedKey := strings.TrimSpace(key)
-			sb.WriteString(fmt.Sprintf("\"%s\": \"%s\"", trimmedKey, line[trimmedKey]))
+		projected := stringOnlyJSON{}
+		for _, key := range strings.Split(*project, ",") {
+			projected[key] = line[key]
 		}
-		sb.WriteString("}")
-		fmt.Println(sb.String())
+		jsonOut.Encode(projected)
 	}
 }
 
