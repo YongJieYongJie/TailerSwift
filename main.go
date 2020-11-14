@@ -17,6 +17,7 @@ var (
 	filtersArg    = flag.String("filters", "{}", "A JSON string containg key-regex pairs")
 	numGoroutines = flag.Int("numGoroutines", 4, "Number of concurrent goroutines to use for parsing the stream")
 	project       = flag.String("project", "", "A comma-separated list of string representing keys to be printed out")
+	outputFormat  = flag.String("outputFormat", "json", "csv or json")
 )
 
 type stringOnlyJSON map[string]string
@@ -71,14 +72,27 @@ func (f filter) ToKeep(jsonObj stringOnlyJSON) bool {
 	return true
 }
 
+func getSerializer(format string) serializer {
+	switch format {
+	case "json":
+		return jsonSerializer{}
+	case "csv":
+		return csvSerializer{}
+	default:
+		panic(fmt.Errorf("unknown serialization format: %s", format))
+	}
+}
+
 func main() {
 	flag.Parse()
+
+	s := getSerializer(*outputFormat)
 
 	// Set up printing queue and goroutine.
 	printQueue := make(chan stringOnlyJSON)
 	var wgPrinter sync.WaitGroup
 	wgPrinter.Add(1)
-	go printer(printQueue, &wgPrinter)
+	go printer(printQueue, &wgPrinter, s)
 
 	// Set up parsing queue and multiple goroutines for parsing.
 	parseQueue := make(chan string)
@@ -103,14 +117,12 @@ func main() {
 	wgPrinter.Wait()
 }
 
-func printer(toPrint <-chan stringOnlyJSON, wg *sync.WaitGroup) {
+func printer(toPrint <-chan stringOnlyJSON, wg *sync.WaitGroup, s serializer) {
 	defer wg.Done()
-
-	jsonOut := json.NewEncoder(os.Stdout)
 
 	for line := range toPrint {
 		if *project == "" {
-			jsonOut.Encode(line)
+			fmt.Println(s.serialize(line))
 			continue
 		}
 
@@ -118,7 +130,7 @@ func printer(toPrint <-chan stringOnlyJSON, wg *sync.WaitGroup) {
 		for _, key := range strings.Split(*project, ",") {
 			projected[key] = line[key]
 		}
-		jsonOut.Encode(projected)
+		fmt.Println(s.serialize(projected))
 	}
 }
 
