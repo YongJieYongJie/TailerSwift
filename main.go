@@ -90,9 +90,8 @@ func main() {
 
 	// Set up printing queue and goroutine.
 	printQueue := make(chan stringOnlyJSON)
-	var wgPrinter sync.WaitGroup
-	wgPrinter.Add(1)
-	go printer(printQueue, &wgPrinter, s)
+	printerDone := make(chan bool)
+	go printer(printQueue, printerDone, s)
 
 	// Set up parsing queue and multiple goroutines for parsing.
 	parseQueue := make(chan string)
@@ -114,11 +113,13 @@ func main() {
 	wgParsers.Wait()
 
 	close(printQueue)
-	wgPrinter.Wait()
+	<-printerDone
 }
 
-func printer(toPrint <-chan stringOnlyJSON, wg *sync.WaitGroup, s serializer) {
-	defer wg.Done()
+func printer(toPrint <-chan stringOnlyJSON, done chan<- bool, s serializer) {
+	defer func() {
+		done <- true
+	}()
 
 	for line := range toPrint {
 		if *project == "" {
